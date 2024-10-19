@@ -41,6 +41,16 @@ db.init_app(app)
 # Data file configuration
 CSV_FILE = 'live_data.csv'
 
+def calculate_tons(temp_differential):
+    """Calculate cooling tons based on temperature differential"""
+    BTU_PER_TON = 12000
+    SPECIFIC_HEAT = 1.0  # BTU/lb°F
+    DENSITY = 8.34  # lb/gallon
+    FLOW_RATE = 100  # Assume 100 GPM flow rate
+    
+    tons = (temp_differential * SPECIFIC_HEAT * DENSITY * FLOW_RATE * 60) / BTU_PER_TON
+    return max(0, tons)
+
 def generate_test_data(stop_event):
     """Generate mock sensor data"""
     logger.info(f"Starting data generation for {CSV_FILE}")
@@ -64,7 +74,6 @@ def generate_test_data(stop_event):
             with open(CSV_FILE, "a", newline="", encoding="utf8") as file:
                 writer = csv.writer(file)
                 
-                # Generate random data
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 inlet_temp = round(20 + 5 * random.random(), 2)
                 outlet_temp = round(10 + 5 * random.random(), 2)
@@ -82,25 +91,16 @@ def generate_test_data(stop_event):
         except Exception as e:
             logger.error(f"Error in generate_test_data: {str(e)}")
             time.sleep(60)
-def calculate_tons(temp_differential):
-    """Calculate cooling tons based on temperature differential"""
-    BTU_PER_TON = 12000
-    SPECIFIC_HEAT = 1.0  # BTU/lb°F
-    DENSITY = 8.34  # lb/gallon
-    FLOW_RATE = 100  # Assume 100 GPM flow rate
-    
-    tons = (temp_differential * SPECIFIC_HEAT * DENSITY * FLOW_RATE * 60) / BTU_PER_TON
-    return max(0, tons)
 
 def calculate_averages(data_points):
     """Calculate averages from a list of data points"""
     if not data_points:
         return None
-    
-    avg_kw = sum(p['kw'] for p in data_points) / len(data_points)
-    avg_pressure = sum(p['pressure_diff'] for p in data_points) / len(data_points)
-    avg_temp = sum(p['temp_diff'] for p in data_points) / len(data_points)
-    avg_kwt = sum(p['kw_per_ton'] for p in data_points) / len(data_points)
+        
+    avg_kw = sum(d['kw'] for d in data_points) / len(data_points)
+    avg_pressure = sum(d['pressure_diff'] for d in data_points) / len(data_points)
+    avg_temp = sum(d['temp_diff'] for d in data_points) / len(data_points)
+    avg_kwt = sum(d['kw_per_ton'] for d in data_points) / len(data_points)
     
     return {
         'kw': avg_kw,
@@ -108,25 +108,6 @@ def calculate_averages(data_points):
         'temperature_differential': avg_temp,
         'kw_per_ton': avg_kwt
     }
-def calculate_kw_per_ton(temp_differential):
-    """Calculate kW/Ton metric"""
-    try:
-        if temp_differential <= 0:
-            return 0
-        
-        simulated_kw = temp_differential * 1.5
-        
-        BTU_PER_TON = 12000
-        SPECIFIC_HEAT = 1.0
-        DENSITY = 8.34
-        
-        tons = (temp_differential * SPECIFIC_HEAT * DENSITY) / BTU_PER_TON
-        kw_per_ton = simulated_kw / tons if tons > 0 else 0
-        
-        return round(kw_per_ton, 3)
-    except Exception as e:
-        logger.error(f"Error calculating kW/Ton: {str(e)}")
-        return 0
 
 def data_collector(stop_event):
     """Process for collecting data from CSV file"""
@@ -148,31 +129,23 @@ def data_collector(stop_event):
                         for row in csv_reader:
                             if len(row) == 5 and row[0] != "Timestamp":  # Skip header
                                 try:
-                                    # Parse the CSV data correctly
                                     timestamp = row[0]
                                     inlet_temp = float(row[1])
                                     inlet_pressure = float(row[2])
                                     outlet_temp = float(row[3])
                                     outlet_pressure = float(row[4])
                                     
-                                    # Calculate differentials
                                     temp_diff = inlet_temp - outlet_temp
                                     pressure_diff = inlet_pressure - outlet_pressure
-                                    
-                                    # Calculate tons
                                     tons = calculate_tons(temp_diff)
-                                    
-                                    # Calculate kW and kW/Ton
                                     simulated_kw = temp_diff * 1.5
                                     kw_per_ton = simulated_kw / tons if tons > 0 else 0
                                     
-                                    # Add to current 5-minute bucket
                                     current_5min_data.append({
                                         'kw': simulated_kw,
                                         'pressure_diff': pressure_diff,
                                         'temp_diff': temp_diff,
-                                        'kw_per_ton': kw_per_ton,
-                                        'tons': tons
+                                        'kw_per_ton': kw_per_ton
                                     })
                                     
                                 except Exception as e:
@@ -189,24 +162,19 @@ def data_collector(stop_event):
                 time_diff = (current_time - last_save_time).total_seconds()
                 if time_diff >= 300:  # 5 minutes = 300 seconds
                     if current_5min_data:
-                        # Calculate averages
-                        avg_kw = sum(d['kw'] for d in current_5min_data) / len(current_5min_data)
-                        avg_pressure = sum(d['pressure_diff'] for d in current_5min_data) / len(current_5min_data)
-                        avg_temp = sum(d['temp_diff'] for d in current_5min_data) / len(current_5min_data)
-                        avg_kwt = sum(d['kw_per_ton'] for d in current_5min_data) / len(current_5min_data)
-                        avg_tons = sum(d['tons'] for d in current_5min_data) / len(current_5min_data)
+                        averages = calculate_averages(current_5min_data)
                         
                         with app.app_context():
                             new_reading = RawData(
                                 timestamp=current_time,
-                                kw=avg_kw,
-                                pressure_differential=avg_pressure,
-                                temperature_differential=avg_temp,
-                                kw_per_ton=avg_kwt
+                                kw=averages['kw'],
+                                pressure_differential=averages['pressure_differential'],
+                                temperature_differential=averages['temperature_differential'],
+                                kw_per_ton=averages['kw_per_ton']
                             )
                             db.session.add(new_reading)
                             db.session.commit()
-                            logger.info(f'5-minute averages saved: kW={avg_kw:.2f}, kW/Ton={avg_kwt:.3f}, Tons={avg_tons:.2f}')
+                            logger.info(f'5-minute averages saved: kW={averages["kw"]:.2f}, kW/Ton={averages["kw_per_ton"]:.3f}')
                         
                         # Reset for next 5-minute period
                         current_5min_data = []
@@ -219,7 +187,7 @@ def data_collector(stop_event):
             time.sleep(5)
 
 def data_aggregator(stop_event):
-    """Process for aggregating data to 15-minute and hourly intervals"""
+    """Process for aggregating data"""
     logger.info("Starting data aggregator process")
     
     while not stop_event.is_set():
@@ -241,7 +209,6 @@ def data_aggregator(stop_event):
                 # Group by 15-minute intervals
                 fifteen_min_groups = defaultdict(list)
                 for reading in raw_data:
-                    # Round to nearest 15 minutes
                     interval = reading.timestamp.replace(
                         minute=(reading.timestamp.minute // 15) * 15,
                         second=0,
@@ -315,8 +282,7 @@ def data_aggregator(stop_event):
                 db.session.commit()
                 logger.info('Data aggregation completed')
             
-            # Run aggregation every 15 minutes
-            time.sleep(900)
+            time.sleep(900)  # Run aggregation every 15 minutes
             
         except Exception as e:
             logger.error(f'Data aggregator error: {str(e)}')
@@ -336,7 +302,7 @@ def get_data():
     try:
         with app.app_context():
             recent_data = RawData.query.filter(
-                RawData.timestamp >= datetime.utcnow() - timedelta(days=1)
+                RawData.timestamp >= datetime.utcnow() - timedelta(hours=1)
             ).order_by(RawData.timestamp.desc()).all()
             
             return jsonify({
@@ -345,6 +311,90 @@ def get_data():
             })
     except Exception as e:
         logger.error(f"Error in get_data route: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+@app.route('/api/data/15min')
+def get_data_15min():
+    try:
+        with app.app_context():
+            data = Data15Min.query.filter(
+                Data15Min.timestamp >= datetime.utcnow() - timedelta(days=1)
+            ).order_by(Data15Min.timestamp.desc()).all()
+            
+            if not data:  # If no 15-min data, fall back to raw data
+                data = RawData.query.filter(
+                    RawData.timestamp >= datetime.utcnow() - timedelta(days=1)
+                ).order_by(RawData.timestamp.desc()).all()
+                
+                return jsonify({
+                    'success': True,
+                    'data': [reading.to_dict() for reading in data]
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': [
+                    {
+                        'timestamp': reading.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                        'kw': reading.kw_avg,
+                        'pressure_differential': reading.pressure_differential_avg,
+                        'temperature_differential': reading.temperature_differential_avg,
+                        'kw_per_ton': reading.kw_per_ton_avg
+                    }
+                    for reading in data
+                ]
+            })
+    except Exception as e:
+        logger.error(f"Error in get_data_15min route: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/data/hourly')
+def get_data_hourly():
+    try:
+        with app.app_context():
+            data = DataHourly.query.filter(
+                DataHourly.timestamp >= datetime.utcnow() - timedelta(days=7)
+            ).order_by(DataHourly.timestamp.desc()).all()
+            
+            if not data:  # If no hourly data, fall back to 15-min data
+                data = Data15Min.query.filter(
+                    Data15Min.timestamp >= datetime.utcnow() - timedelta(days=7)
+                ).order_by(Data15Min.timestamp.desc()).all()
+                
+                return jsonify({
+                    'success': True,
+                    'data': [
+                        {
+                            'timestamp': reading.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                            'kw': reading.kw_avg,
+                            'pressure_differential': reading.pressure_differential_avg,
+                            'temperature_differential': reading.temperature_differential_avg,
+                            'kw_per_ton': reading.kw_per_ton_avg
+                        }
+                        for reading in data
+                    ]
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': [
+                    {
+                        'timestamp': reading.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                        'kw': reading.kw_avg,
+                        'pressure_differential': reading.pressure_differential_avg,
+                        'temperature_differential': reading.temperature_differential_avg,
+                        'kw_per_ton': reading.kw_per_ton_avg
+                    }
+                    for reading in data
+                ]
+            })
+    except Exception as e:
+        logger.error(f"Error in get_data_hourly route: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
@@ -433,91 +483,3 @@ if __name__ == '__main__':
             logger.error(f"Error removing CSV file: {str(e)}")
         
         logger.info("Application shutdown complete")
-@app.route('/api/data/15min')
-def get_data_15min():
-    try:
-        with app.app_context():
-            data = Data15Min.query.filter(
-                Data15Min.timestamp >= datetime.utcnow() - timedelta(days=1)
-            ).order_by(Data15Min.timestamp.desc()).all()
-            
-            if not data:  # If no 15-min data, fall back to raw data
-                data = RawData.query.filter(
-                    RawData.timestamp >= datetime.utcnow() - timedelta(days=1)
-                ).order_by(RawData.timestamp.desc()).all()
-                
-                return jsonify({
-                    'success': True,
-                    'data': [reading.to_dict() for reading in data]
-                })
-            
-            return jsonify({
-                'success': True,
-                'data': [
-                    {
-                        'timestamp': reading.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                        'kw': reading.kw_avg,
-                        'pressure_differential': reading.pressure_differential_avg,
-                        'temperature_differential': reading.temperature_differential_avg,
-                        'kw_per_ton': reading.kw_per_ton_avg
-                    }
-                    for reading in data
-                ]
-            })
-    except Exception as e:
-        logger.error(f"Error in get_data_15min route: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
-
-@app.route('/api/data/hourly')
-def get_data_hourly():
-    try:
-        with app.app_context():
-            data = DataHourly.query.filter(
-                DataHourly.timestamp >= datetime.utcnow() - timedelta(days=7)
-            ).order_by(DataHourly.timestamp.desc()).all()
-            
-            if not data:  # If no hourly data, fall back to 15-min data
-                data = Data15Min.query.filter(
-                    Data15Min.timestamp >= datetime.utcnow() - timedelta(days=7)
-                ).order_by(Data15Min.timestamp.desc()).all()
-                
-                return jsonify({
-                    'success': True,
-                    'data': [
-                        {
-                            'timestamp': reading.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                            'kw': reading.kw_avg,
-                            'pressure_differential': reading.pressure_differential_avg,
-                            'temperature_differential': reading.temperature_differential_avg,
-                            'kw_per_ton': reading.kw_per_ton_avg
-                        }
-                        for reading in data
-                    ]
-                })
-            
-            return jsonify({
-                'success': True,
-                'data': [
-                    {
-                        'timestamp': reading.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                        'kw': reading.kw_avg,
-                        'pressure_differential': reading.pressure_differential_avg,
-                        'temperature_differential': reading.temperature_differential_avg,
-                        'kw_per_ton': reading.kw_per_ton_avg
-                    }
-                    for reading in data
-                ]
-            })
-    except Exception as e:
-        logger.error(f"Error in get_data_hourly route: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
