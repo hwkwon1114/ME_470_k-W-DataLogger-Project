@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Sensor Monitoring Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <h1>Sensor Monitoring Dashboard</h1>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="xAxis">X-Axis:</label>
+                <select id="xAxis" onchange="updateChartType()">
+                    <option value="time">Time</option>
+                    <option value="ton">Cooling Tons</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="timeInterval">Time Interval:</label>
+                <select id="timeInterval" onchange="updateChartData()">
+                    <option value="5min">5 Minutes</option>
+                    <option value="15min">15 Minutes</option>
+                    <option value="1hour">Hourly</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="yMetric">Y-Axis Metric:</label>
+                <select id="yMetric" onchange="updateChartData()">
+                    <option value="kw">Power (kW)</option>
+                    <option value="pressure">Pressure Differential (PSI)</option>
+                    <option value="temperature">Temperature Differential (°F)</option>
+                    <option value="kwt">Efficiency (kW/Ton)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="mainChart"></canvas>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <h2>Power Consumption</h2>
+                <div class="current-value" id="current-kw">-- kW</div>
+            </div>
+
+            <div class="metric-card">
+                <h2>System Efficiency</h2>
+                <div class="current-value" id="current-kwt">-- kW/Ton</div>
+            </div>
+
+            <div class="metric-card">
+                <h2>Temperature Differential</h2>
+                <div class="current-value" id="current-temp">-- °F</div>
+            </div>
+
+            <div class="metric-card">
+                <h2>Pressure Differential</h2>
+                <div class="current-value" id="current-pressure">-- PSI</div>
+            </div>
+
+            <div class="metric-card">
+                <h2>Cooling Load</h2>
+                <div class="current-value" id="current-tons">-- Tons</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let mainChart = null;
+        let currentChartType = 'time';
+
+        const chartColors = {
+            kw: '#2196F3',
+            pressure: '#9C27B0',
+            temperature: '#FF5722',
+            kwt: '#4CAF50'
+        };
+
+        const metricLabels = {
+            kw: 'Power (kW)',
+            pressure: 'Pressure Differential (PSI)',
+            temperature: 'Temperature Differential (°F)',
+            kwt: 'Efficiency (kW/Ton)'
+        };
+
+        const metricKeys = {
+            kw: 'kw',
+            pressure: 'pressure_differential',
+            temperature: 'temperature_differential',
+            kwt: 'kw_per_ton'
+        };
+
+        function calculateTons(tempDiff) {
+            const BTU_PER_TON = 12000;
+            const SPECIFIC_HEAT = 1.0;
+            const DENSITY = 8.34;
+            const FLOW_RATE = 100;
+            return (tempDiff * SPECIFIC_HEAT * DENSITY * FLOW_RATE * 60) / BTU_PER_TON;
+        }
+
+        function createChart(type) {
+            const ctx = document.getElementById('mainChart').getContext('2d');
+            const isTimeSeries = type === 'time';
+
+            return new Chart(ctx, {
+                type: isTimeSeries ? 'line' : 'scatter',
+                data: {
+                    datasets: [{
+                        label: metricLabels['kw'],
+                        borderColor: chartColors['kw'],
+                        backgroundColor: chartColors['kw'],
+                        borderWidth: 2,
+                        pointRadius: isTimeSeries ? 0 : 4,
+                        pointHoverRadius: isTimeSeries ? 4 : 6,
+                        fill: false,
+                        tension: isTimeSeries ? 0.4 : 0,
+                        showLine: isTimeSeries,
+                        data: []
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        tooltip: {
+                            enabled: true,
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: {
+                        x: isTimeSeries ? {
+                            type: 'time',
+                            time: {
+                                unit: 'minute',
+                                displayFormats: {
+                                    minute: 'HH:mm:ss'
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        } : {
+                            type: 'linear',
+                            position: 'bottom',
+                            title: {
+                                display: true,
+                                text: 'Cooling Tons'
+                            },
+                            grid: {
+                                display: true
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: metricLabels['kw']
+                            }
+                        }
+                    },
+                    interaction: {
+                        intersect: !isTimeSeries,
+                        mode: isTimeSeries ? 'index' : 'point'
+                    }
+                }
+            });
+        }
+
+        function updateChartType() {
+            const newType = document.getElementById('xAxis').value;
+            if (newType !== currentChartType) {
+                currentChartType = newType;
+                if (mainChart) {
+                    mainChart.destroy();
+                }
+                mainChart = createChart(currentChartType);
+                updateChartData();
+            }
+        }
+
+        function getEndpoint() {
+            const interval = document.getElementById('timeInterval').value;
+            switch (interval) {
+                case '15min': return '/api/data/15min';
+                case '1hour': return '/api/data/hourly';
+                default: return '/api/data';
+            }
+        }
+
+        function updateChartData() {
+            const yMetric = document.getElementById('yMetric').value;
+            const endpoint = getEndpoint();
+
+            fetch(endpoint)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.data.length > 0) {
+                        const latestData = data.data[0];
+                        updateMetricDisplays(latestData);
+
+                        const chartData = data.data.reverse();
+                        mainChart.data.datasets[0].label = metricLabels[yMetric];
+                        mainChart.data.datasets[0].borderColor = chartColors[yMetric];
+                        mainChart.data.datasets[0].backgroundColor = chartColors[yMetric];
+
+                        mainChart.data.datasets[0].data = chartData.map(reading => ({
+                            x: currentChartType === 'ton' ?
+                                calculateTons(reading.temperature_differential) :
+                                new Date(reading.timestamp),
+                            y: reading[metricKeys[yMetric]]
+                        }));
+
+                        mainChart.options.scales.y.title.text = metricLabels[yMetric];
+                        mainChart.update();
+                    }
+                })
+                .catch(error => console.error('Error fetching data:', error));
+        }
+
+        function updateMetricDisplays(data) {
+            document.getElementById('current-kw').textContent =
+                `${data.kw.toFixed(2)} kW`;
+            document.getElementById('current-kwt').textContent =
+                `${data.kw_per_ton.toFixed(3)} kW/Ton`;
+            document.getElementById('current-temp').textContent =
+                `${data.temperature_differential.toFixed(2)} °F`;
+            document.getElementById('current-pressure').textContent =
+                `${data.pressure_differential.toFixed(2)} PSI`;
+
+            const tons = calculateTons(data.temperature_differential);
+            document.getElementById('current-tons').textContent =
+                `${tons.toFixed(2)} Tons`;
+        }
+
+        // Initialize and start updates
+        mainChart = createChart('time');
+        updateChartData();
+        setInterval(updateChartData, 5000);
+    </script>
+</body>
+
+</html>
