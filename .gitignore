@@ -224,3 +224,4 @@ Thumbs.db
 # Project specific
 sensor_data.db
 config/local_settings.py
+live_data.csv
