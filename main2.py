@@ -421,14 +421,8 @@ if __name__ == '__main__':
     # Create a stop event for graceful shutdown
     stop_event = multiprocessing.Event()
     
-    # Set up signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
     # Initialize process variables
-    generator_process = None
-    collector_process = None
-    aggregator_process = None
+    processes = []
     
     try:
         # Start data generator process
@@ -437,6 +431,7 @@ if __name__ == '__main__':
             args=(stop_event,)
         )
         generator_process.start()
+        processes.append(generator_process)
         logger.info("Started data generator process")
         
         # Start data collector process
@@ -445,6 +440,7 @@ if __name__ == '__main__':
             args=(stop_event,)
         )
         collector_process.start()
+        processes.append(collector_process)
         logger.info("Started data collector process")
         
         # Start data aggregator process
@@ -453,33 +449,37 @@ if __name__ == '__main__':
             args=(stop_event,)
         )
         aggregator_process.start()
+        processes.append(aggregator_process)
         logger.info("Started data aggregator process")
         
-        # Start Flask application
+        def shutdown_server():
+            stop_event.set()
+            for process in processes:
+                process.join(timeout=5)  # Wait up to 5 seconds for each process
+                if process.is_alive():
+                    process.terminate()  # Force terminate if still running
+            
+            # Clean up the CSV file
+            try:
+                if os.path.exists(CSV_FILE):
+                    os.remove(CSV_FILE)
+                    logger.info(f"Removed {CSV_FILE}")
+            except Exception as e:
+                logger.error(f"Error removing CSV file: {str(e)}")
+            
+            logger.info("Application shutdown complete")
+            sys.exit(0)
+
+        # Set up signal handlers
+        signal.signal(signal.SIGINT, lambda x, y: shutdown_server())
+        signal.signal(signal.SIGTERM, lambda x, y: shutdown_server())
+        
+        # Start Flask application without debug mode
         logger.info("Starting Flask application")
-        app.run(host='0.0.0.0', port=5001, debug=True)
+        app.run(host='0.0.0.0', port=5001, debug=False)
         
     except Exception as e:
         logger.error(f"Error in main process: {str(e)}")
         logger.error(traceback.format_exc())
     finally:
-        # Signal all processes to stop
-        stop_event.set()
-        
-        # Wait for processes to finish if they were started
-        if generator_process:
-            generator_process.join()
-        if collector_process:
-            collector_process.join()
-        if aggregator_process:
-            aggregator_process.join()
-        
-        # Clean up the CSV file
-        try:
-            if os.path.exists(CSV_FILE):
-                os.remove(CSV_FILE)
-                logger.info(f"Removed {CSV_FILE}")
-        except Exception as e:
-            logger.error(f"Error removing CSV file: {str(e)}")
-        
-        logger.info("Application shutdown complete")
+        shutdown_server()
