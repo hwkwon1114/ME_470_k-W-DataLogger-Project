@@ -1,27 +1,55 @@
-// Define the analog input pin
-const int analogPin = A0;    // Using A0 as our input pin
-int sensorValue = 0;         // Variable to store the sensor reading
-float R1 = 100000.00;         // Known resistor value (10k ohms)
+// Define the analog input pins
+const int analogPin1 = A0;
+const int analogPin2 = A1;
+
+// Variables to store sensor readings
+int sensorValue1 = 0;
+int sensorValue2 = 0;
+
+// Known resistor values (10k ohms)
+float R1 = 10000.00;
+float R2 = 10000.00;
+
+// Steinhart-Hart coefficients
+const float A = 0.001028904003803319;
+const float B = 0.00023917243029486095;
+const float C = 1.5647042887059707e-07;
+
+// Function to calculate temperature from resistance
+float calculateTemperature(float resistance) {
+    float steinhart;
+    steinhart = log(resistance);
+    steinhart = A + B * steinhart + C * steinhart * steinhart * steinhart;
+    steinhart = 1.0 / steinhart;
+    steinhart -= 273.15;
+    return steinhart;
+}
 
 void setup() {
-    // Initialize serial communication at 9600 baud rate
     Serial.begin(9600);
 }
 
 void loop() {
-    sensorValue = analogRead(analogPin);
+    // Read values from both sensors
+    sensorValue1 = analogRead(analogPin1);
+    sensorValue2 = analogRead(analogPin2);
     
-    // Print raw ADC value (should be 0-1023)
-    Serial.print("ADC Raw: ");
-    Serial.print(sensorValue);
+    // Calculate voltage for both sensors
+    float voltage1 = sensorValue1 * (5.0 / 1023.0);
+    float voltage2 = sensorValue2 * (5.0 / 1023.0);
     
-    float voltage = sensorValue * (5.0 / 1023.0);
-    Serial.print(", Voltage: ");
-    Serial.print(voltage, 3);  // Print with 3 decimal places
+    // Calculate resistance for both sensors
+    float resistance1 = R1 * voltage1 / (5.0 - voltage1);
+    float resistance2 = R2 * voltage2 / (5.0 - voltage2);
     
-    float resistance = R1 * voltage / (5.0 - voltage);
-    Serial.print(", Resistance: ");
-    Serial.println(resistance);
+    // Calculate temperature for both sensors
+    float temp1 = calculateTemperature(resistance1);
+    float temp2 = calculateTemperature(resistance2);
     
-    delay(1000);
+    // Send data in a format easy to parse: "temp1,temp2"
+    Serial.print(temp1);
+    Serial.print(",");
+    Serial.println(temp2);
+    
+    delay(1000); // Wait for a second before next reading
 }
