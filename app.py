@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timedelta
 import time
 from threading import Thread
-import json
+from collections import defaultdict
 
 app = Flask(__name__)
 
@@ -47,6 +47,73 @@ def init_db():
     
     conn.commit()
     conn.close()
+
+class DataAggregator:
+    def __init__(self, sampling_rate_seconds):
+        self.data_points = defaultdict(list)
+        self.last_aggregation = {
+            'interval1': datetime.min,
+            'interval2': datetime.min,
+            'interval3': datetime.min
+        }
+        self.sampling_rate = sampling_rate_seconds
+    
+    def add_data_point(self, temp1, temp2, pressure1, pressure2, power, flow_coefficient):
+        # Calculate metrics
+        diff_pressure = abs(pressure1 - pressure2)
+        flow_rate = flow_coefficient * (diff_pressure ** 0.5)
+        temp_diff = abs(temp1 - temp2)
+        cooling_tons = (flow_rate * temp_diff * 8.33 * 60) / 12000
+        kw_ton = power / cooling_tons if cooling_tons > 0 else 0
+        
+        timestamp = datetime.now()
+        
+        metrics = {
+            'timestamp': timestamp,
+            'temp1': temp1,
+            'temp2': temp2,
+            'pressure1': pressure1,
+            'pressure2': pressure2,
+            'power': power,
+            'kw_ton': kw_ton,
+            'cooling_tons': cooling_tons,
+            'flow_rate': flow_rate
+        }
+        
+        for interval in ['interval1', 'interval2', 'interval3']:
+            self.data_points[interval].append(metrics)
+    
+    def get_aggregated_data(self, interval_name, interval_seconds):
+        current_time = datetime.now()
+        data_points = self.data_points[interval_name]
+        
+        # Calculate how many points we expect for this interval
+        expected_points = interval_seconds / self.sampling_rate
+        
+        # Remove old data points beyond the interval window
+        cutoff_time = current_time - timedelta(seconds=interval_seconds)
+        data_points = [dp for dp in data_points if dp['timestamp'] > cutoff_time]
+        self.data_points[interval_name] = data_points
+        
+        # Check if we have enough data points
+        if not data_points or len(data_points) < (expected_points * 0.8):  # Allow 20% tolerance
+            return None
+        
+        # Calculate averages
+        avg_data = {
+            'temp1': sum(dp['temp1'] for dp in data_points) / len(data_points),
+            'temp2': sum(dp['temp2'] for dp in data_points) / len(data_points),
+            'pressure1': sum(dp['pressure1'] for dp in data_points) / len(data_points),
+            'pressure2': sum(dp['pressure2'] for dp in data_points) / len(data_points),
+            'power': sum(dp['power'] for dp in data_points) / len(data_points),
+            'kw_ton': sum(dp['kw_ton'] for dp in data_points) / len(data_points),
+            'cooling_tons': sum(dp['cooling_tons'] for dp in data_points) / len(data_points),
+            'flow_rate': sum(dp['flow_rate'] for dp in data_points) / len(data_points),
+            'timestamp': current_time,
+            'num_points': len(data_points)
+        }
+        
+        return avg_data
 
 @app.route('/config', methods=['GET', 'POST'])
 def config():
@@ -99,11 +166,11 @@ def config():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def collect_data():
-    last_collection = {
-        'interval1': datetime.min,
-        'interval2': datetime.min,
-        'interval3': datetime.min
-    }
+    # Configure sampling rate (in seconds)
+    SAMPLING_RATE = 5  # Change this value to adjust raw sampling rate
+    
+    aggregator = DataAggregator(SAMPLING_RATE)
+    print(f"Starting data collection with {SAMPLING_RATE} second sampling rate")
     
     while True:
         try:
@@ -126,36 +193,41 @@ def collect_data():
             
             current_time = datetime.now()
             
-            # Sample data (replace with actual sensor readings)
-            temp1, temp2 = 30, 25
-            pressure1, pressure2 = 2, 0
-            power = 3
+            # Sample data
+            temp1, temp2 = 30, 25  # TODO: Implement temperature sensor reading
+            pressure1, pressure2 = 2, 0  # TODO: Implement pressure sensor reading
+            power = 3  # TODO: Implement power meter reading
             
-            # Calculate metrics
-            diff_pressure = abs(pressure1 - pressure2)
-            flow_rate = flow_coefficient * (diff_pressure ** 0.5)
-            temp_diff = abs(temp1 - temp2)
-            cooling_tons = (flow_rate * temp_diff * 8.33 * 60) / 12000
-            kw_ton = power / cooling_tons if cooling_tons > 0 else 0
+            # Add raw data point for aggregation
+            aggregator.add_data_point(temp1, temp2, pressure1, pressure2, power, flow_coefficient)
             
-            # Insert data for each interval if enough time has passed
-            timestamp_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
-            data_tuple = (timestamp_str, temp1, temp2, pressure1, pressure2, 
-                         power, kw_ton, cooling_tons, flow_rate)
+            # Check each interval for aggregation
+            intervals = [
+                ('interval1', interval1_seconds),
+                ('interval2', interval2_seconds),
+                ('interval3', interval3_seconds)
+            ]
             
-            if (current_time - last_collection['interval1']).total_seconds() >= interval1_seconds:
-                c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,'interval1')''', data_tuple)
-                last_collection['interval1'] = current_time
-                
-            if (current_time - last_collection['interval2']).total_seconds() >= interval2_seconds:
-                c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,'interval2')''', data_tuple)
-                last_collection['interval2'] = current_time
-                
-            if (current_time - last_collection['interval3']).total_seconds() >= interval3_seconds:
-                c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,'interval3')''', data_tuple)
-                last_collection['interval3'] = current_time
+            for interval_name, seconds in intervals:
+                if (current_time - aggregator.last_aggregation[interval_name]).total_seconds() >= seconds:
+                    avg_data = aggregator.get_aggregated_data(interval_name, seconds)
+                    
+                    if avg_data:
+                        print(f"Aggregating {interval_name}: {avg_data['num_points']} points over {seconds} seconds")
+                        c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                                (avg_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                                 avg_data['temp1'],
+                                 avg_data['temp2'],
+                                 avg_data['pressure1'],
+                                 avg_data['pressure2'],
+                                 avg_data['power'],
+                                 avg_data['kw_ton'],
+                                 avg_data['cooling_tons'],
+                                 avg_data['flow_rate'],
+                                 interval_name))
+                        aggregator.last_aggregation[interval_name] = current_time
             
-            # Clean up old data based on retention settings
+            # Clean up old data
             for i, days in enumerate(retention_days, 1):
                 c.execute(f"DELETE FROM metrics WHERE interval = 'interval{i}' AND timestamp < datetime('now', '-' || ? || ' days')", 
                          (days,))
@@ -166,7 +238,7 @@ def collect_data():
         except Exception as e:
             print(f"Error in data collection: {str(e)}")
         
-        time.sleep(1)  # Check every second
+        time.sleep(SAMPLING_RATE)
 
 @app.route('/')
 def dashboard():
