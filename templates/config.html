@@ -1,0 +1,201 @@
+<!-- templates/config.html -->
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Configuration</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+        }
+
+        .nav-links {
+            text-align: right;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .config-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 30px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-group {
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+
+        h3 {
+            color: #666;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #555;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        .nav-links a {
+            color: #4CAF50;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="nav-links">
+        <a href="/">Back to Dashboard</a>
+    </div>
+
+    <div class="config-container">
+        <h2>Configuration Settings</h2>
+
+        <form id="configForm">
+            <div class="form-group">
+                <label for="flowCoefficient">Flow Coefficient:</label>
+                <div class="input-group">
+                    <input type="number" id="flowCoefficient" value="{{ flow_coefficient }}" step="0.01">
+                    <div class="help-text">Coefficient used for flow rate calculations</div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <h3>Data Collection Intervals</h3>
+
+                <div class="input-group">
+                    <label for="interval1">Interval 1 (seconds):</label>
+                    <input type="number" id="interval1" value="{{ interval1_seconds }}" min="1">
+                    <div class="help-text">Fast sampling interval (default: 60 seconds)</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="interval2">Interval 2 (seconds):</label>
+                    <input type="number" id="interval2" value="{{ interval2_seconds }}" min="1">
+                    <div class="help-text">Medium sampling interval (default: 900 seconds = 15 minutes)</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="interval3">Interval 3 (seconds):</label>
+                    <input type="number" id="interval3" value="{{ interval3_seconds }}" min="1">
+                    <div class="help-text">Slow sampling interval (default: 3600 seconds = 1 hour)</div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <h3>Data Retention (days)</h3>
+
+                <div class="input-group">
+                    <label for="retention1">Retention for Interval 1:</label>
+                    <input type="number" id="retention1" value="{{ retention_interval1 }}">
+                    <div class="help-text">How long to keep data from interval 1</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="retention2">Retention for Interval 2:</label>
+                    <input type="number" id="retention2" value="{{ retention_interval2 }}">
+                    <div class="help-text">How long to keep data from interval 2</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="retention3">Retention for Interval 3:</label>
+                    <input type="number" id="retention3" value="{{ retention_interval3 }}">
+                    <div class="help-text">How long to keep data from interval 3</div>
+                </div>
+            </div>
+
+            <button type="submit">Save Configuration</button>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('configForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const config = {
+                flow_coefficient: parseFloat(document.getElementById('flowCoefficient').value),
+                interval1_seconds: parseInt(document.getElementById('interval1').value),
+                interval2_seconds: parseInt(document.getElementById('interval2').value),
+                interval3_seconds: parseInt(document.getElementById('interval3').value),
+                retention_interval1: parseInt(document.getElementById('retention1').value),
+                retention_interval2: parseInt(document.getElementById('retention2').value),
+                retention_interval3: parseInt(document.getElementById('retention3').value)
+            };
+
+            try {
+                const response = await fetch('/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+
+                if (response.ok) {
+                    alert('Configuration saved successfully!');
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error saving configuration: ${errorData.message || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error saving configuration: ' + error.message);
+            }
+        });
+    </script>
+</body>
+
+</html>
