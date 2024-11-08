@@ -5,12 +5,10 @@ import time
 from threading import Thread
 from collections import defaultdict
 import random
+from Sensor import Sensor
 import os
-import math
 
 app = Flask(__name__)
-# Set to production mode
-app.debug = False
 
 def init_db():
     conn = sqlite3.connect('metrics.db')
@@ -49,30 +47,108 @@ def init_db():
     if not c.fetchone():
         c.execute('''INSERT INTO config VALUES 
                      (1, 0.5, 60, 900, 3600, 1, 7, 30)''')  # 60s=1min, 900s=15min, 3600s=1hour
+    setup_retention_triggers()
     
     conn.commit()
     conn.close()
 
-class DummyDataGenerator:
-    def __init__(self):
-        self.time = 0
-        self.base_temp1 = 12.0  # Cold water temperature
-        self.base_temp2 = 7.0   # Chilled water temperature
-        self.base_pressure1 = 30.0  # Input pressure
-        self.base_pressure2 = 25.0  # Output pressure
-        self.base_power = 100.0     # Base power consumption
+# First, fix the enforce_retention function to work with all SQLite versions
+def enforce_retention():
+    """
+    Enforces data retention policies by removing data older than the configured retention period
+    for each interval. Returns the number of records deleted for each interval.
+    """
+    try:
+        conn = sqlite3.connect('metrics.db')
+        c = conn.cursor()
         
-    def read(self):
-        self.time += 0.1
-        temp1 = self.base_temp1 + math.sin(self.time * 0.1) + random.uniform(-0.2, 0.2)
-        temp2 = self.base_temp2 + math.sin(self.time * 0.1) + random.uniform(-0.2, 0.2)
-        pressure1 = self.base_pressure1 + math.sin(self.time * 0.05) * 2 + random.uniform(-0.5, 0.5)
-        pressure2 = self.base_pressure2 + math.sin(self.time * 0.05) * 2 + random.uniform(-0.5, 0.5)
-        return temp1, temp2, pressure1, pressure2
+        # Get current retention settings
+        c.execute('''SELECT retention_interval1, retention_interval2, retention_interval3 
+                    FROM config WHERE id = 1''')
+        retention_days = c.fetchone()
+        
+        if not retention_days:
+            raise Exception("Configuration not found")
+        
+        deleted_counts = {}
+        current_time = datetime.now()
+        
+        # For each interval, delete data older than its retention period
+        for interval_num, days in enumerate(retention_days, 1):
+            interval_name = f'interval{interval_num}'
+            cutoff_date = (current_time - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Get count before deletion
+            c.execute('''SELECT COUNT(*) FROM metrics 
+                        WHERE interval = ? AND timestamp < ?''',
+                     (interval_name, cutoff_date))
+            count_before = c.fetchone()[0]
+            
+            # Delete old records
+            c.execute('''DELETE FROM metrics 
+                        WHERE interval = ? AND timestamp < ?''',
+                     (interval_name, cutoff_date))
+            
+            deleted_counts[interval_name] = count_before
+            
+        conn.commit()
+        
+        # Optimize database after deletions if any records were deleted
+        if sum(deleted_counts.values()) > 0:
+            c.execute('VACUUM')
+        
+        conn.close()
+        return deleted_counts
+        
+    except Exception as e:
+        print(f"Error enforcing retention: {str(e)}")
+        if 'conn' in locals() and conn:
+            conn.close()
+        return None
+
+def setup_retention_triggers():
+    """
+    Sets up database triggers to maintain data retention policies and necessary indexes
+    """
+    try:
+        conn = sqlite3.connect('metrics.db')
+        c = conn.cursor()
+        
+        # Create index on timestamp and interval columns for better performance
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_metrics_timestamp_interval 
+                    ON metrics(timestamp, interval)''')
+        
+        # Create trigger to enforce retention after config updates
+        c.execute('''DROP TRIGGER IF EXISTS enforce_retention_on_config_update''')
+        c.execute('''CREATE TRIGGER enforce_retention_on_config_update
+                    AFTER UPDATE ON config
+                    FOR EACH ROW
+                    BEGIN
+                        DELETE FROM metrics 
+                        WHERE interval = 'interval1' 
+                        AND timestamp < datetime('now', '-' || NEW.retention_interval1 || ' days');
+                        
+                        DELETE FROM metrics 
+                        WHERE interval = 'interval2' 
+                        AND timestamp < datetime('now', '-' || NEW.retention_interval2 || ' days');
+                        
+                        DELETE FROM metrics 
+                        WHERE interval = 'interval3' 
+                        AND timestamp < datetime('now', '-' || NEW.retention_interval3 || ' days');
+                    END;''')
+        
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        print(f"Error setting up retention triggers: {str(e)}")
+        if 'conn' in locals() and conn:
+            conn.close()
 
 class DataAggregator:
     def __init__(self, sampling_rate_seconds):
         self.data_points = defaultdict(list)
+        # Initialize with current time floored to nearest interval
         current_time = datetime.now()
         self.last_aggregation = {
             'interval1': self._floor_timestamp(current_time, 60),
@@ -82,6 +158,7 @@ class DataAggregator:
         self.sampling_rate = sampling_rate_seconds
     
     def _floor_timestamp(self, dt, interval_seconds):
+        """Floor a datetime to the nearest interval"""
         timestamp = dt.timestamp()
         return datetime.fromtimestamp(timestamp - (timestamp % interval_seconds))
     
@@ -114,16 +191,20 @@ class DataAggregator:
         current_time = datetime.now()
         current_interval_start = self._floor_timestamp(current_time, interval_seconds)
         
+        # Only aggregate if we've moved to a new interval
         if current_interval_start <= self.last_aggregation[interval_name]:
             return None
         
+        # Get previous interval's start and end times
         prev_interval_start = current_interval_start - timedelta(seconds=interval_seconds)
         
+        # Get data points from the previous interval
         interval_points = [
             dp for dp in self.data_points[interval_name]
             if prev_interval_start <= dp['timestamp'] < current_interval_start
         ]
         
+        # If we have any points in the interval, aggregate them
         if interval_points:
             avg_data = {
                 'temp1': sum(dp['temp1'] for dp in interval_points) / len(interval_points),
@@ -138,75 +219,18 @@ class DataAggregator:
                 'num_points': len(interval_points)
             }
             
+            # Update last aggregation time
             self.last_aggregation[interval_name] = current_interval_start
             
+            # Remove data points older than the current interval
             self.data_points[interval_name] = [
                 dp for dp in self.data_points[interval_name]
                 if dp['timestamp'] >= prev_interval_start
             ]
             
+            print(f"Aggregating {interval_name}: {len(interval_points)} points over {interval_seconds} seconds")
             return avg_data
-
-def collect_data():
-    SAMPLING_RATE = 0.1
-    dummy_sensor = DummyDataGenerator()
-    aggregator = DataAggregator(SAMPLING_RATE)
-    last_values = None
     
-    while True:
-        try:
-            sensor_data = dummy_sensor.read()
-            
-            if sensor_data != last_values:
-                temp1, temp2, pressure1, pressure2 = sensor_data
-                power = 100 + random.uniform(-5, 5)
-                
-                last_values = sensor_data
-                
-                conn = sqlite3.connect('metrics.db')
-                c = conn.cursor()
-                
-                c.execute('''SELECT interval1_seconds, interval2_seconds, interval3_seconds,
-                           flow_coefficient 
-                           FROM config WHERE id = 1''')
-                config = c.fetchone()
-                
-                if not config:
-                    raise Exception("Configuration not found")
-                    
-                interval1_seconds, interval2_seconds, interval3_seconds, flow_coefficient = config
-                
-                aggregator.add_data_point(temp1, temp2, pressure1, pressure2, power, flow_coefficient)
-                
-                intervals = [
-                    ('interval1', interval1_seconds),
-                    ('interval2', interval2_seconds),
-                    ('interval3', interval3_seconds)
-                ]
-                
-                for interval_name, seconds in intervals:
-                    avg_data = aggregator.get_aggregated_data(interval_name, seconds)
-                    if avg_data:
-                        c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,?)''',
-                                (avg_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
-                                 avg_data['temp1'],
-                                 avg_data['temp2'],
-                                 avg_data['pressure1'],
-                                 avg_data['pressure2'],
-                                 avg_data['power'],
-                                 avg_data['kw_ton'],
-                                 avg_data['cooling_tons'],
-                                 avg_data['flow_rate'],
-                                 interval_name))
-                
-                conn.commit()
-                conn.close()
-            
-        except Exception as e:
-            pass
-        
-        time.sleep(SAMPLING_RATE)
-
 @app.route('/config', methods=['GET', 'POST'])
 def config():
     if request.method == 'POST':
@@ -232,31 +256,105 @@ def config():
                       int(data['retention_interval3'])))
             conn.commit()
             conn.close()
-            return jsonify({"status": "success"})
+            
+            # Explicitly enforce retention after config update
+            deleted_counts = enforce_retention()
+            if deleted_counts:
+                print(f"Config update retention enforcement deleted: {deleted_counts}")
+            
+            return jsonify({"status": "success", "deleted_counts": deleted_counts})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 400
-    
-    try:
-        conn = sqlite3.connect('metrics.db')
-        c = conn.cursor()
-        c.execute('SELECT * FROM config WHERE id = 1')
-        config_data = c.fetchone()
-        conn.close()
-        
-        if config_data is None:
-            return jsonify({"status": "error", "message": "Configuration not found"}), 404
-            
-        return render_template('config.html', 
-                             flow_coefficient=config_data[1],
-                             interval1_seconds=config_data[2],
-                             interval2_seconds=config_data[3],
-                             interval3_seconds=config_data[4],
-                             retention_interval1=config_data[5],
-                             retention_interval2=config_data[6],
-                             retention_interval3=config_data[7])
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
 
+def collect_data():
+    # Reduce sampling rate significantly
+    SAMPLING_RATE = 1  # seconds
+    sensor = Sensor()  # Initialize sensor
+    
+    aggregator = DataAggregator(SAMPLING_RATE)
+    print(f"Starting data collection with {SAMPLING_RATE} second sampling rate")
+    last_retention_check = datetime.now()
+    RETENTION_CHECK_INTERVAL = timedelta(hours=1)
+    last_values = None  # Track last values to detect changes
+    
+    while True:
+        try:
+            current_time = datetime.now()
+            if current_time - last_retention_check > RETENTION_CHECK_INTERVAL:
+                deleted_counts = enforce_retention()
+                if deleted_counts:
+                    print(f"Retention enforcement deleted: {deleted_counts}")
+                last_retention_check = current_time
+            # Sample data first - do this before database operations
+            sensor_data = sensor.read()
+            
+            if sensor_data[0] is None:  # If any reading failed
+                time.sleep(0.1)  # Short sleep on error
+                continue
+            
+            # Only proceed with database operations if values have changed
+            if sensor_data != last_values:
+                temp1, temp2, pressure1, pressure2 = sensor_data
+                power = 100 + random.random()  # TODO: Replace with actual power sensor
+                
+                # Print readings immediately when they change
+                print(f"Sensor readings - Temps: {temp1:.1f}°C, {temp2:.1f}°C, Pressures: {pressure1:.1f}, {pressure2:.1f}")
+                
+                last_values = sensor_data
+                
+                # Database operations
+                conn = sqlite3.connect('metrics.db')
+                c = conn.cursor()
+                
+                # Get current configuration
+                c.execute('''SELECT interval1_seconds, interval2_seconds, interval3_seconds,
+                           flow_coefficient 
+                           FROM config WHERE id = 1''')
+                config = c.fetchone()
+                
+                if not config:
+                    raise Exception("Configuration not found")
+                    
+                interval1_seconds, interval2_seconds, interval3_seconds, flow_coefficient = config
+                
+                # Add raw data point
+                aggregator.add_data_point(temp1, temp2, pressure1, pressure2, power, flow_coefficient)
+                
+                # Try to aggregate for each interval
+                intervals = [
+                    ('interval1', interval1_seconds),
+                    ('interval2', interval2_seconds),
+                    ('interval3', interval3_seconds)
+                ]
+                
+                for interval_name, seconds in intervals:
+                    avg_data = aggregator.get_aggregated_data(interval_name, seconds)
+                    if avg_data:
+                        c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                                (avg_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                                 avg_data['temp1'],
+                                 avg_data['temp2'],
+                                 avg_data['pressure1'],
+                                 avg_data['pressure2'],
+                                 avg_data['power'],
+                                 avg_data['kw_ton'],
+                                 avg_data['cooling_tons'],
+                                 avg_data['flow_rate'],
+                                 interval_name))
+                
+                conn.commit()
+                conn.close()
+            
+        except Exception as e:
+            print(f"Error in data collection: {str(e)}")
+            try:
+                sensor.close()
+                time.sleep(0.1)
+                sensor = Sensor()
+            except:
+                pass
+        
+        time.sleep(SAMPLING_RATE)  
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
@@ -267,6 +365,7 @@ def get_data(interval):
         conn = sqlite3.connect('metrics.db')
         c = conn.cursor()
         
+        # Get interval settings for display
         c.execute('SELECT interval1_seconds, interval2_seconds, interval3_seconds FROM config WHERE id = 1')
         intervals = c.fetchone()
         
@@ -312,4 +411,4 @@ if __name__ == '__main__':
         data_thread = Thread(target=collect_data, daemon=True)
         data_thread.start()
     
-    app.run(host='0.0.0.0', port=5001, debug=False)
+    app.run(debug=True)

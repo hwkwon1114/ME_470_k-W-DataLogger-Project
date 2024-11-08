@@ -189,7 +189,7 @@ def config():
 
 def collect_data():
     # Reduce sampling rate significantly
-    SAMPLING_RATE = 0.1  # 100ms instead of 3s
+    SAMPLING_RATE = 1  # seconds
     sensor = Sensor()  # Initialize sensor
     
     aggregator = DataAggregator(SAMPLING_RATE)
