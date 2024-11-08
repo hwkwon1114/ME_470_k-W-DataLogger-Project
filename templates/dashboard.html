@@ -1,4 +1,3 @@
-<!-- templates/dashboard.html -->
 <!DOCTYPE html>
 <html>
 
@@ -8,6 +7,7 @@
     <script
         src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
+        /* ... (keeping all existing styles) ... */
         body {
             margin: 0;
             padding: 20px;
@@ -98,10 +98,6 @@
             border-radius: 4px;
             display: none;
         }
-
-        .debug-info {
-            display: none;
-        }
     </style>
 </head>
 
@@ -144,14 +140,18 @@
                 <canvas id="metricsChart"></canvas>
             </div>
         </div>
-        <div id="debugInfo" class="debug-info"></div>
     </div>
 
     <script>
         let currentChart = null;
         let currentData = null;
         let updateInterval = null;
+        let lastUpdateTime = null;
 
+        // Minimum update interval (in milliseconds)
+        const MIN_UPDATE_INTERVAL = 1000; // 1 second minimum to prevent excessive updates
+
+        // Other constants remain the same
         const metricLabels = {
             'kw_ton': 'kW/Ton',
             'diff_pressure': 'Differential Pressure',
@@ -169,11 +169,6 @@
 
         function hideError() {
             document.getElementById('errorMessage').style.display = 'none';
-        }
-
-        function showDebugInfo(info) {
-            const debugDiv = document.getElementById('debugInfo');
-            debugDiv.innerHTML = '<pre>' + JSON.stringify(info, null, 2) + '</pre>';
         }
 
         function destroyChart() {
@@ -203,67 +198,54 @@
                 y: parseFloat(currentData[yMetric][index])
             }));
 
+            const chartType = xMetric === 'timestamps' ? 'line' : 'scatter';
+
             currentChart = new Chart(ctx, {
-                type: 'line',
+                type: chartType,
                 data: {
                     datasets: [{
                         label: `${metricLabels[yMetric]} vs ${metricLabels[xMetric]}`,
                         data: chartData,
                         borderColor: 'rgb(75, 192, 192)',
                         backgroundColor: 'rgba(75, 192, 192, 0.5)',
-                        pointRadius: 3,
+                        pointRadius: xMetric === 'timestamps' ? 3 : 5,
+                        showLine: xMetric === 'timestamps',
                         tension: 0.1
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    animation: false, // Completely disable animations
+                    spanGaps: true, // Connect points across gaps
                     scales: {
                         x: {
                             type: xMetric === 'timestamps' ? 'time' : 'linear',
                             title: {
                                 display: true,
                                 text: metricLabels[xMetric],
-                                font: {
-                                    size: 14
-                                }
+                                font: { size: 14 }
                             },
-                            time: {
+                            time: xMetric === 'timestamps' ? {
                                 unit: 'minute',
-                                displayFormats: {
-                                    minute: 'HH:mm:ss'
-                                }
-                            },
-                            ticks: {
-                                font: {
-                                    size: 12
-                                }
-                            }
+                                displayFormats: { minute: 'HH:mm:ss' }
+                            } : undefined,
+                            ticks: { font: { size: 12 } }
                         },
                         y: {
                             title: {
                                 display: true,
                                 text: metricLabels[yMetric],
-                                font: {
-                                    size: 14
-                                }
+                                font: { size: 14 }
                             },
-                            ticks: {
-                                font: {
-                                    size: 12
-                                }
-                            },
+                            ticks: { font: { size: 12 } },
                             beginAtZero: true
                         }
                     },
                     plugins: {
                         legend: {
                             position: 'top',
-                            labels: {
-                                font: {
-                                    size: 14
-                                }
-                            }
+                            labels: { font: { size: 14 } }
                         }
                     }
                 }
@@ -272,6 +254,12 @@
 
         async function updateData() {
             try {
+                const now = Date.now();
+                // Skip update if it's too soon since the last update
+                if (lastUpdateTime && (now - lastUpdateTime) < MIN_UPDATE_INTERVAL) {
+                    return;
+                }
+
                 const interval = document.getElementById('intervalSelect').value;
                 const response = await fetch(`/data/${interval}`);
 
@@ -280,6 +268,21 @@
                 }
 
                 const data = await response.json();
+
+                // Update timestamp for rate limiting
+                lastUpdateTime = Date.now();
+
+                // Process intervals first
+                if (data.intervals) {
+                    const selectedInterval = document.getElementById('intervalSelect').value;
+                    const intervalIndex = parseInt(selectedInterval.replace('interval', '')) - 1;
+                    let newUpdateInterval = Math.max(data.intervals[intervalIndex] * 1000, MIN_UPDATE_INTERVAL);
+
+                    // Only restart interval if it's different
+                    if (!updateInterval || newUpdateInterval !== updateInterval._interval) {
+                        restartUpdateInterval(newUpdateInterval);
+                    }
+                }
 
                 // Reverse the data arrays to show chronological order
                 for (let key in data) {
@@ -297,41 +300,53 @@
 
                 destroyChart();
                 createChart();
+
             } catch (error) {
                 showError(`Error fetching data: ${error.message}`);
                 console.error('Data fetch error:', error);
             }
         }
 
-        function setupEventListeners() {
-            document.getElementById('intervalSelect').addEventListener('change', updateData);
-            document.getElementById('xAxisSelect').addEventListener('change', () => {
-                destroyChart();
-                createChart();
-            });
-            document.getElementById('yAxisSelect').addEventListener('change', () => {
-                destroyChart();
-                createChart();
-            });
-        }
-
-        function startUpdates() {
-            // Clear any existing interval
+        function restartUpdateInterval(interval) {
             if (updateInterval) {
                 clearInterval(updateInterval);
             }
 
-            // Initial load
-            updateData();
+            // Ensure minimum interval
+            const safeInterval = Math.max(interval, MIN_UPDATE_INTERVAL);
 
-            // Set new interval
-            updateInterval = setInterval(updateData, 10000); // Update every 10 seconds
+            // Store the interval value for comparison
+            updateInterval = setInterval(updateData, safeInterval);
+            updateInterval._interval = safeInterval;
+
+            // Immediate update
+            updateData();
+        }
+
+        function setupEventListeners() {
+            document.getElementById('intervalSelect').addEventListener('change', () => {
+                updateData(); // Immediate update on interval change
+            });
+
+            document.getElementById('xAxisSelect').addEventListener('change', () => {
+                if (currentData) {
+                    destroyChart();
+                    createChart();
+                }
+            });
+
+            document.getElementById('yAxisSelect').addEventListener('change', () => {
+                if (currentData) {
+                    destroyChart();
+                    createChart();
+                }
+            });
         }
 
         // Initialize the dashboard
         document.addEventListener('DOMContentLoaded', () => {
             setupEventListeners();
-            startUpdates();
+            updateData(); // Initial data load
         });
     </script>
 </body>
