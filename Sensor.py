@@ -1,4 +1,5 @@
 import serial
+import time
 
 
 class Sensor:
@@ -20,3 +21,10 @@ class Sensor:
 
     def close(self):
         self.serial.close()
+
+def test_sensor() -> None:
+    sensor = Sensor(port="/dev/ttyACM0", baudrate=9600)
+    while True:
+        temp1, temp2, p1, p2 = sensor.read()
+        print(f"{temp1=}, {temp2=}, {p1=}, {p2=}")
+        time.sleep(1)
