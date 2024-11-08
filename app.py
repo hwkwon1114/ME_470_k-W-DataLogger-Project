@@ -6,6 +6,7 @@ from threading import Thread
 from collections import defaultdict
 import random
 from Sensor import Sensor
+import os
 
 app = Flask(__name__)
 
@@ -316,7 +317,9 @@ def get_data(interval):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    init_db()
-    data_thread = Thread(target=collect_data, daemon=True)
-    data_thread.start()
+    if not os.environ.get('WERKZEUG_RUN_MAIN'):
+        init_db()
+        data_thread = Thread(target=collect_data, daemon=True)
+        data_thread.start()
+    
     app.run(debug=True)
