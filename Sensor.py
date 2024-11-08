@@ -2,7 +2,7 @@ import serial
 import time
 
 class Sensor:
-    def __init__(self, port='/dev/ttyUSB0', baudrate=9600):
+    def __init__(self, port='/dev/ttyACM0', baudrate=9600):
         self.serial = serial.Serial(port, baudrate, timeout=1)
         time.sleep(2)  # Wait for Arduino to reset
         
