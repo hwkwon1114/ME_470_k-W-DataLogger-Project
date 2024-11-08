@@ -188,84 +188,87 @@ def config():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def collect_data():
-    # Configure sampling rate (in seconds)
-    SAMPLING_RATE = 3
+    # Reduce sampling rate significantly
+    SAMPLING_RATE = 0.1  # 100ms instead of 3s
     sensor = Sensor()  # Initialize sensor
     
     aggregator = DataAggregator(SAMPLING_RATE)
     print(f"Starting data collection with {SAMPLING_RATE} second sampling rate")
     
+    last_values = None  # Track last values to detect changes
+    
     while True:
         try:
-            conn = sqlite3.connect('metrics.db')
-            c = conn.cursor()
-            
-            # Get current configuration
-            c.execute('''SELECT interval1_seconds, interval2_seconds, interval3_seconds,
-                               flow_coefficient 
-                        FROM config WHERE id = 1''')
-            config = c.fetchone()
-            
-            if not config:
-                raise Exception("Configuration not found")
-                
-            interval1_seconds, interval2_seconds, interval3_seconds, flow_coefficient = config
-            
-            # Sample data with error handling
+            # Sample data first - do this before database operations
             sensor_data = sensor.read()
+            
             if sensor_data[0] is None:  # If any reading failed
-                print("Failed to read sensor data, skipping this iteration")
-                time.sleep(SAMPLING_RATE)
+                time.sleep(0.1)  # Short sleep on error
                 continue
             
-            temp1, temp2, pressure1, pressure2 = sensor_data
-            power = 100 + random.random()  # TODO: Replace with actual power sensor
-            
-            # Print readings for debugging
-            print(f"Sensor readings - Temps: {temp1:.1f}°C, {temp2:.1f}°C, Pressures: {pressure1:.1f}, {pressure2:.1f}")
-            
-            # Add raw data point
-            aggregator.add_data_point(temp1, temp2, pressure1, pressure2, power, flow_coefficient)
-            
-            # Get current floor time for consistent interval checking
-            current_floor = aggregator._floor_timestamp(datetime.now(), min(interval1_seconds, interval2_seconds, interval3_seconds))
-            
-            # Try to aggregate for each interval
-            intervals = [
-                ('interval1', interval1_seconds),
-                ('interval2', interval2_seconds),
-                ('interval3', interval3_seconds)
-            ]
-            
-            for interval_name, seconds in intervals:
-                avg_data = aggregator.get_aggregated_data(interval_name, seconds)
-                if avg_data:
-                    c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,?)''',
-                            (avg_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
-                             avg_data['temp1'],
-                             avg_data['temp2'],
-                             avg_data['pressure1'],
-                             avg_data['pressure2'],
-                             avg_data['power'],
-                             avg_data['kw_ton'],
-                             avg_data['cooling_tons'],
-                             avg_data['flow_rate'],
-                             interval_name))
-            
-            conn.commit()
-            conn.close()
+            # Only proceed with database operations if values have changed
+            if sensor_data != last_values:
+                temp1, temp2, pressure1, pressure2 = sensor_data
+                power = 100 + random.random()  # TODO: Replace with actual power sensor
+                
+                # Print readings immediately when they change
+                print(f"Sensor readings - Temps: {temp1:.1f}°C, {temp2:.1f}°C, Pressures: {pressure1:.1f}, {pressure2:.1f}")
+                
+                last_values = sensor_data
+                
+                # Database operations
+                conn = sqlite3.connect('metrics.db')
+                c = conn.cursor()
+                
+                # Get current configuration
+                c.execute('''SELECT interval1_seconds, interval2_seconds, interval3_seconds,
+                           flow_coefficient 
+                           FROM config WHERE id = 1''')
+                config = c.fetchone()
+                
+                if not config:
+                    raise Exception("Configuration not found")
+                    
+                interval1_seconds, interval2_seconds, interval3_seconds, flow_coefficient = config
+                
+                # Add raw data point
+                aggregator.add_data_point(temp1, temp2, pressure1, pressure2, power, flow_coefficient)
+                
+                # Try to aggregate for each interval
+                intervals = [
+                    ('interval1', interval1_seconds),
+                    ('interval2', interval2_seconds),
+                    ('interval3', interval3_seconds)
+                ]
+                
+                for interval_name, seconds in intervals:
+                    avg_data = aggregator.get_aggregated_data(interval_name, seconds)
+                    if avg_data:
+                        c.execute('''INSERT INTO metrics VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                                (avg_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                                 avg_data['temp1'],
+                                 avg_data['temp2'],
+                                 avg_data['pressure1'],
+                                 avg_data['pressure2'],
+                                 avg_data['power'],
+                                 avg_data['kw_ton'],
+                                 avg_data['cooling_tons'],
+                                 avg_data['flow_rate'],
+                                 interval_name))
+                
+                conn.commit()
+                conn.close()
             
         except Exception as e:
             print(f"Error in data collection: {str(e)}")
-            # If there's an error with the sensor, try to close and reopen it
             try:
                 sensor.close()
-                time.sleep(1)
+                time.sleep(0.1)
                 sensor = Sensor()
             except:
                 pass
         
-        time.sleep(SAMPLING_RATE)
+        time.sleep(SAMPLING_RATE)  
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
