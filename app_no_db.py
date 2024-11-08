@@ -226,8 +226,8 @@ def collect_data():
     SAMPLING_RATE = 3
     sensor = Sensor()  # Initialize sensor
 
-    aggregator = DataAggregator(SAMPLING_RATE)
-    print(f"Starting data collection with {SAMPLING_RATE} second sampling rate")
+    # aggregator = DataAggregator(SAMPLING_RATE)
+    # print(f"Starting data collection with {SAMPLING_RATE} second sampling rate")
 
     while True:
         try:
@@ -264,6 +264,7 @@ def collect_data():
             print(
                 f"Sensor readings - Temps: {temp1:.1f}°C, {temp2:.1f}°C, Pressures: {pressure1:.1f}, {pressure2:.1f}"
             )
+            print(datetime.now())
 
             # # Add raw data point
             # aggregator.add_data_point(temp1, temp2, pressure1, pressure2, power, flow_coefficient)
