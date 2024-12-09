@@ -6,15 +6,16 @@ from threading import Thread
 from collections import defaultdict
 from Sensor import Sensor
 
+#Flask app
 app = Flask(__name__)
-aggregator = None
+aggregator = None # DataAggregator object
 
-def init_db():
+def init_db(): # Initialize the database
     conn = sqlite3.connect('metrics.db')
     c = conn.cursor()
 
     # Drop existing tables to ensure clean schema
-    c.execute('DROP TABLE IF EXISTS metrics')
+    c.execute('DROP TABLE IF EXISTS metrics') 
     c.execute('DROP TABLE IF EXISTS config')
 
     # Create metrics table
@@ -30,7 +31,7 @@ def init_db():
     flow_rate REAL NOT NULL,
     interval TEXT NOT NULL)''')
 
-    c.execute('CREATE INDEX idx_timestamp_interval ON metrics(timestamp, interval)')
+    c.execute('CREATE INDEX idx_timestamp_interval ON metrics(timestamp, interval)') # Index for faster queries
 
     c.execute('''CREATE TABLE config
     (id INTEGER PRIMARY KEY,
@@ -40,12 +41,12 @@ def init_db():
     interval3_seconds INTEGER NOT NULL CHECK(interval3_seconds > 0),
     retention_interval1 INTEGER NOT NULL CHECK(retention_interval1 > 0),
     retention_interval2 INTEGER NOT NULL CHECK(retention_interval2 > 0),
-    retention_interval3 INTEGER NOT NULL CHECK(retention_interval3 > 0))''')
+    retention_interval3 INTEGER NOT NULL CHECK(retention_interval3 > 0))''') # Configuration table
 
     c.execute('''INSERT INTO config VALUES
-    (1, 0.5, 60, 900, 3600, 1, 7, 30)''')
+    (1, 0.5, 60, 900, 3600, 1, 7, 30)''') # Default configuration
 
-    conn.commit()
+    conn.commit() 
     conn.close()
 
 class DataAggregator:
@@ -60,6 +61,7 @@ class DataAggregator:
         self.sampling_rate = sampling_rate_seconds
         self.max_points = self._get_max_points()
     
+    # Get the maximum number of data points to store
     def _get_max_points(self):
         with sqlite3.connect('metrics.db') as conn:
             c = conn.cursor()
@@ -78,10 +80,11 @@ class DataAggregator:
                 'interval2': (config[2] * 24 * 3600) // config[3],
                 'interval3': (config[4] * 24 * 3600) // config[5]
             }
-    
+    # Update the maximum number of data points
     def update_max_points(self):
         self.max_points = self._get_max_points()
     
+    # Add a new data point
     def add_data_point(self, temp1, temp2, pressure1, pressure2, power, flow_coefficient):
         timestamp = datetime.now()
         
@@ -109,10 +112,12 @@ class DataAggregator:
             if len(self.data_points[interval]) > max_points:
                 self.data_points[interval] = self.data_points[interval][-max_points:]
     
+    # Round down the timestamp to the nearest interval
     def _floor_timestamp(self, dt, interval_seconds):
         timestamp = dt.timestamp()
         return datetime.fromtimestamp(timestamp - (timestamp % interval_seconds))
     
+    # Get the aggregated data for a given interval
     def get_aggregated_data(self, interval_name, interval_seconds):
         current_time = datetime.now()
         current_interval_start = self._floor_timestamp(current_time, interval_seconds)
@@ -148,14 +153,14 @@ class DataAggregator:
             ]
             
             return avg_data
-
+# Configuration page
 @app.route('/config', methods=['GET', 'POST'])
 def config():
     global aggregator
-    
+    # Update the configuration
     if request.method == 'POST':
         try:
-            data = request.json
+            data = request.json # Get the JSON data
             required_fields = [
                 'flow_coefficient', 'interval1_seconds', 'interval2_seconds',
                 'interval3_seconds', 'retention_interval1', 'retention_interval2',
@@ -204,6 +209,7 @@ def config():
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
     
+    # Get the current configuration
     with sqlite3.connect('metrics.db') as conn:
         c = conn.cursor()
         c.execute('SELECT * FROM config WHERE id = 1')
