@@ -208,8 +208,7 @@ def collect_data():
             
             # Only proceed with database operations if values have changed
             if sensor_data != last_values:
-                temp1, temp2, pressure1, pressure2 = sensor_data
-                power = 100 + random.random()  # TODO: Replace with actual power sensor
+                temp1, temp2, pressure1, pressure2, power= sensor_data
                 
                 # Print readings immediately when they change
                 print(f"Sensor readings - Temps: {temp1:.1f}°C, {temp2:.1f}°C, Pressures: {pressure1:.1f}, {pressure2:.1f}")
