@@ -5,6 +5,7 @@ import time
 from threading import Thread
 from collections import defaultdict
 from Sensor import Sensor
+import math
 
 #Flask app
 app = Flask(__name__)
@@ -35,7 +36,6 @@ def init_db(): # Initialize the database
 
     c.execute('''CREATE TABLE config
     (id INTEGER PRIMARY KEY,
-    flow_coefficient REAL NOT NULL CHECK(flow_coefficient > 0),
     interval1_seconds INTEGER NOT NULL CHECK(interval1_seconds > 0),
     interval2_seconds INTEGER NOT NULL CHECK(interval2_seconds > 0),
     interval3_seconds INTEGER NOT NULL CHECK(interval3_seconds > 0),
@@ -44,10 +44,48 @@ def init_db(): # Initialize the database
     retention_interval3 INTEGER NOT NULL CHECK(retention_interval3 > 0))''') # Configuration table
 
     c.execute('''INSERT INTO config VALUES
-    (1, 0.5, 60, 900, 3600, 1, 7, 30)''') # Default configuration
+    (1, 60, 900, 3600, 1, 7, 30)''') # Default configuration
+    
+    c.execute('''CREATE TABLE calibration_points
+        (id INTEGER PRIMARY KEY,
+        pressure_diff REAL NOT NULL,
+        flow_rate REAL NOT NULL,
+        timestamp TEXT NOT NULL)''')
+
 
     conn.commit() 
     conn.close()
+
+class FlowCalibration:
+    def __init__(self):
+        self.m = 0.5  # Default slope
+        self.b = 0    # Default intercept
+        self.a = 1    # Default coefficient
+        self._load_calibration()
+        
+    def _load_calibration(self):
+        with sqlite3.connect('metrics.db') as conn:
+            c = conn.cursor()
+            c.execute('''SELECT pressure_diff, flow_rate 
+                        FROM calibration_points 
+                        ORDER BY timestamp DESC LIMIT 2''')
+            points = c.fetchall()
+            
+            if len(points) == 2:
+                x1, y1 = points[0]  # pressure_diff, flow_rate
+                x2, y2 = points[1]
+                
+                if x1 > 0 and x2 > 0 and y1 > 0 and y2 > 0:
+                    # Calculate m (slope) and b (intercept) in log space
+                    self.m = math.log(y2/y1) / math.log(x2/x1)
+                    self.b = math.log(y1) - self.m * math.log(x1)
+                    # Calculate coefficient a = e^b
+                    self.a = math.exp(self.b)
+    
+    def calculate_flow_rate(self, pressure_diff):
+        if pressure_diff <= 0:
+            return 0
+        return self.a * (pressure_diff ** self.m)
 
 class DataAggregator:
     def __init__(self, sampling_rate_seconds):
@@ -60,6 +98,7 @@ class DataAggregator:
         }
         self.sampling_rate = sampling_rate_seconds
         self.max_points = self._get_max_points()
+        self.calibration = FlowCalibration()
     
     # Get the maximum number of data points to store
     def _get_max_points(self):
@@ -85,11 +124,13 @@ class DataAggregator:
         self.max_points = self._get_max_points()
     
     # Add a new data point
-    def add_data_point(self, temp1, temp2, pressure1, pressure2, power, flow_coefficient):
+    def add_data_point(self, temp1, temp2, pressure1, pressure2, power):
         timestamp = datetime.now()
-        
         diff_pressure = abs(pressure1 - pressure2)
-        flow_rate = flow_coefficient * (diff_pressure ** 0.5)
+        
+        # Use calibration for flow rate calculation
+        flow_rate = self.calibration.calculate_flow_rate(diff_pressure)
+        
         temp_diff = abs(temp1 - temp2)
         cooling_tons = (flow_rate * temp_diff * 8.33 * 60) / 12000
         kw_ton = power / cooling_tons if cooling_tons > 0 else 0
@@ -105,13 +146,15 @@ class DataAggregator:
             'cooling_tons': cooling_tons,
             'flow_rate': flow_rate
         }
-        
+    
         for interval in ['interval1', 'interval2', 'interval3']:
             self.data_points[interval].append(metrics)
             max_points = self.max_points[interval]
             if len(self.data_points[interval]) > max_points:
                 self.data_points[interval] = self.data_points[interval][-max_points:]
-    
+
+
+        
     # Round down the timestamp to the nearest interval
     def _floor_timestamp(self, dt, interval_seconds):
         timestamp = dt.timestamp()
@@ -154,6 +197,26 @@ class DataAggregator:
             
             return avg_data
 # Configuration page
+@app.route('/calibration', methods=['POST'])
+def add_calibration_point():
+    try:
+        data = request.json
+        pressure_diff = float(data['pressure_diff'])
+        flow_rate = float(data['flow_rate'])
+        
+        with sqlite3.connect('metrics.db') as conn:
+            c = conn.cursor()
+            c.execute('''INSERT INTO calibration_points 
+                        (pressure_diff, flow_rate, timestamp) 
+                        VALUES (?, ?, ?)''',
+                     (pressure_diff, flow_rate, 
+                      datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            conn.commit()
+            
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/config', methods=['GET', 'POST'])
 def config():
     global aggregator
@@ -162,15 +225,14 @@ def config():
         try:
             data = request.json # Get the JSON data
             required_fields = [
-                'flow_coefficient', 'interval1_seconds', 'interval2_seconds',
-                'interval3_seconds', 'retention_interval1', 'retention_interval2',
-                'retention_interval3'
+                'interval1_seconds', 'interval2_seconds',
+                'interval3_seconds', 'retention_interval1', 
+                'retention_interval2', 'retention_interval3'
             ]
             
             if not all(field in data for field in required_fields):
                 return jsonify({"status": "error", "message": "Missing required fields"}), 400
             
-            flow_coefficient = float(data['flow_coefficient'])
             interval1_seconds = int(data['interval1_seconds'])
             interval2_seconds = int(data['interval2_seconds'])
             interval3_seconds = int(data['interval3_seconds'])
@@ -178,8 +240,6 @@ def config():
             retention_interval2 = int(data['retention_interval2'])
             retention_interval3 = int(data['retention_interval3'])
             
-            if flow_coefficient <= 0:
-                return jsonify({"status": "error", "message": "Flow coefficient must be positive"}), 400
             if any(x <= 0 for x in [interval1_seconds, interval2_seconds, interval3_seconds]):
                 return jsonify({"status": "error", "message": "Intervals must be positive"}), 400
             if any(x <= 0 for x in [retention_interval1, retention_interval2, retention_interval3]):
@@ -188,7 +248,6 @@ def config():
             with sqlite3.connect('metrics.db') as conn:
                 c = conn.cursor()
                 c.execute('''UPDATE config SET 
-                            flow_coefficient = ?,
                             interval1_seconds = ?,
                             interval2_seconds = ?,
                             interval3_seconds = ?,
@@ -196,7 +255,7 @@ def config():
                             retention_interval2 = ?,
                             retention_interval3 = ?
                             WHERE id = 1''',
-                         (flow_coefficient, interval1_seconds, interval2_seconds,
+                         (interval1_seconds, interval2_seconds,
                           interval3_seconds, retention_interval1, retention_interval2,
                           retention_interval3))
                 conn.commit()
@@ -219,13 +278,12 @@ def config():
         return jsonify({"status": "error", "message": "Configuration not found"}), 404
         
     return render_template('config.html', 
-                         flow_coefficient=config_data[1],
-                         interval1_seconds=config_data[2],
-                         interval2_seconds=config_data[3],
-                         interval3_seconds=config_data[4],
-                         retention_interval1=config_data[5],
-                         retention_interval2=config_data[6],
-                         retention_interval3=config_data[7])
+                         interval1_seconds=config_data[1],
+                         interval2_seconds=config_data[2],
+                         interval3_seconds=config_data[3],
+                         retention_interval1=config_data[4],
+                         retention_interval2=config_data[5],
+                         retention_interval3=config_data[6])
 
 def collect_data():
     global aggregator 
@@ -250,17 +308,16 @@ def collect_data():
                 with sqlite3.connect('metrics.db') as conn:
                     c = conn.cursor()
                     c.execute('''SELECT interval1_seconds, interval2_seconds, 
-                               interval3_seconds, flow_coefficient 
-                               FROM config WHERE id = 1''')
+                               interval3_seconds FROM config WHERE id = 1''')
                     config = c.fetchone()
                     
                     if not config:
                         raise ValueError("Configuration not found")
                     
-                    interval1_seconds, interval2_seconds, interval3_seconds, flow_coefficient = config
+                    interval1_seconds, interval2_seconds, interval3_seconds = config
                     
                     aggregator.add_data_point(temp1, temp2, pressure1, pressure2, 
-                                            power, flow_coefficient)
+                                            power)
                     
                     intervals = [
                         ('interval1', interval1_seconds),

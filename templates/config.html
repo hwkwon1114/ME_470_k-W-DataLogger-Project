@@ -106,12 +106,25 @@
 
         <form id="configForm">
             <div class="form-group">
-                <label for="flowCoefficient">Flow Coefficient:</label>
+                <h3>Flow Calibration Points</h3>
+
                 <div class="input-group">
-                    <input type="number" id="flowCoefficient" value="{{ flow_coefficient }}" step="0.01">
-                    <div class="help-text">Coefficient used for flow rate calculations</div>
+                    <label>Calibration Point 1 (x₁, y₁):</label>
+                    <input type="number" id="pressure1" placeholder="Pressure Difference (x₁)" step="0.01">
+                    <input type="number" id="flow1" placeholder="Flow Rate (y₁)" step="0.01">
+                    <div class="help-text">First point for log(y) = m log(x) + b equation</div>
                 </div>
+
+                <div class="input-group">
+                    <label>Calibration Point 2 (x₂, y₂):</label>
+                    <input type="number" id="pressure2" placeholder="Pressure Difference (x₂)" step="0.01">
+                    <input type="number" id="flow2" placeholder="Flow Rate (y₂)" step="0.01">
+                    <div class="help-text">Second point for log(y) = m log(x) + b equation</div>
+                </div>
+
+                <button type="button" onclick="saveCalibration()" style="margin-bottom: 20px">Save Calibration</button>
             </div>
+
 
             <div class="form-group">
                 <h3>Data Collection Intervals</h3>
@@ -160,13 +173,65 @@
             <button type="submit">Save Configuration</button>
         </form>
     </div>
-
     <script>
+        async function saveCalibration() {
+            const points = [
+                {
+                    pressure_diff: parseFloat(document.getElementById('pressure1').value),
+                    flow_rate: parseFloat(document.getElementById('flow1').value)
+                },
+                {
+                    pressure_diff: parseFloat(document.getElementById('pressure2').value),
+                    flow_rate: parseFloat(document.getElementById('flow2').value)
+                }
+            ];
+            if (points[0].pressure_diff === points[1].pressure_diff) {
+                alert('Pressure differences must be different');
+                return;
+            }
+            for (const point of points) {
+                if (isNaN(point.pressure_diff) || isNaN(point.flow_rate)) {
+                    alert('Please enter valid numbers for both calibration points');
+                    return;
+                }
+                if (point.pressure_diff <= 0 || point.flow_rate <= 0) {
+                    alert('Values must be greater than zero');
+                    return;
+                }
+            }
+
+            try {
+                const response = await fetch('/calibration', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(points[0])
+                });
+
+                if (!response.ok) throw new Error('Failed to save first point');
+
+                const response2 = await fetch('/calibration', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(points[1])
+                });
+
+                if (!response2.ok) throw new Error('Failed to save second point');
+
+                alert('Calibration points saved successfully!');
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error saving calibration: ' + error.message);
+            }
+        }
+
         document.getElementById('configForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
             const config = {
-                flow_coefficient: parseFloat(document.getElementById('flowCoefficient').value),
                 interval1_seconds: parseInt(document.getElementById('interval1').value),
                 interval2_seconds: parseInt(document.getElementById('interval2').value),
                 interval3_seconds: parseInt(document.getElementById('interval3').value),
