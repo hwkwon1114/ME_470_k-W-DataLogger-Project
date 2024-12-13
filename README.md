@@ -8,52 +8,42 @@ A real-time monitoring system for HVAC performance metrics with configurable dat
 
 - **Real-time Data Collection**
   - Continuous monitoring of temperature, pressure, and power metrics
-  - Configurable sampling rates at three different intervals
+  - Precise 1-second sampling rate with duplicate prevention
+  - Multi-threaded design for concurrent data collection and processing
   - Automated data aggregation and storage
 
-- **Interactive Dashboard**
-  - Real-time data visualization using Chart.js
-  - Customizable X and Y axis metrics
-  - Multiple visualization options:
-    - Time-series analysis
-    - Performance correlation plots
-    - System efficiency metrics
-
-- **Configurable Settings**
-  - Adjustable flow coefficient
-  - Customizable data collection intervals
-  - Configurable data retention periods
-  - User-friendly configuration interface
+- **Web Interface**
+  - **Dashboard Page**
+    - Real-time visualization of system metrics
+    - Historical data trends display
+    - Interactive performance monitoring
+    - Support for up to 500 most recent entries per interval
+  - **Configuration Page**
+    - System parameter adjustment interface
+    - Data collection interval settings
+    - Retention period configuration
+    - Flow rate calibration management
 
 - **Performance Metrics**
-  - kW/Ton efficiency
-  - Temperature differential
-  - Pressure differential
-  - Cooling load
-  - Flow rate calculations
+  - kW/Ton efficiency calculations
+  - Temperature differential monitoring
+  - Pressure differential tracking
+  - Cooling load computation
+  - Flow rate calculations using logarithmic calibration
 
-## Usage
+## System Architecture
 
-1. Start the application:
-```bash
-python app.py
-```
+- **Sensor Management**
+  - Auto-detection of Arduino ports
+  - 9600 baud rate serial communication
+  - 12800-byte RX/TX buffers
+  - Robust error handling
 
-2. Access the dashboard:
-- Open a web browser and navigate to `http://localhost:5001`
-- View the configuration page at `http://localhost:5001/config`
-
-## Configuration Options
-
-### Data Collection Intervals
-- Interval 1: Fast sampling (default: 60 seconds)
-- Interval 2: Medium sampling (default: 900 seconds)
-- Interval 3: Slow sampling (default: 3600 seconds)
-
-### Data Retention
-- Configurable retention periods for each interval
-- Automatic data cleanup based on retention settings
-- Independent retention policies for different sampling rates
+- **Data Processing**
+  - Efficient aggregation algorithms
+  - Floor timestamp mechanism for precise intervals
+  - Defaultdict structure for flexible data management
+  - Automatic hourly data cleanup
 
 ## Database Schema
 
@@ -73,25 +63,43 @@ CREATE TABLE metrics (
 )
 ```
 
-### Config Table
+### Configuration Table
 ```sql
 CREATE TABLE config (
     id INTEGER PRIMARY KEY,
-    flow_coefficient REAL NOT NULL,
-    interval1_seconds INTEGER NOT NULL,
-    interval2_seconds INTEGER NOT NULL,
-    interval3_seconds INTEGER NOT NULL,
-    retention_interval1 INTEGER NOT NULL,
-    retention_interval2 INTEGER NOT NULL,
-    retention_interval3 INTEGER NOT NULL
+    interval1_seconds INTEGER NOT NULL CHECK(interval1_seconds > 0),
+    interval2_seconds INTEGER NOT NULL CHECK(interval2_seconds > 0),
+    interval3_seconds INTEGER NOT NULL CHECK(interval3_seconds > 0),
+    retention_interval1 INTEGER NOT NULL CHECK(retention_interval1 > 0),
+    retention_interval2 INTEGER NOT NULL CHECK(retention_interval2 > 0),
+    retention_interval3 INTEGER NOT NULL CHECK(retention_interval3 > 0)
 )
 ```
 
-## API Endpoints
+### Calibration Table
+```sql
+CREATE TABLE calibration_points (
+    id INTEGER PRIMARY KEY,
+    pressure_diff REAL NOT NULL,
+    flow_rate REAL NOT NULL,
+    timestamp TEXT NOT NULL
+)
+```
 
-- `/`: Main dashboard
-- `/config`: Configuration interface (GET/POST)
-- `/data/<interval>`: Data retrieval for specified interval
-n
-- Flask for web framework
-- SQLite for data storage
+## Usage
+
+1. Start the application:
+```bash
+python app.py
+```
+
+2. Access the interface:
+- Dashboard: `http://localhost:5001`
+- Configuration: `http://localhost:5001/config`
+
+## Dependencies
+- Flask web framework
+- SQLite database
+- Python serial library
+- Threading support
+- Math utilities
