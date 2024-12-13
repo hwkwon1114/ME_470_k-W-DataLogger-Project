@@ -1,5 +1,3 @@
-# ME_470_kW/Ton-DataLogger-Project
-
 # kW/Ton Data Logger
 
 A real-time monitoring system for HVAC performance metrics with configurable data collection intervals and interactive visualization.
