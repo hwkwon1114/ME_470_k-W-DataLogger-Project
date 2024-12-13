@@ -46,12 +46,11 @@ def init_db(): # Initialize the database
     c.execute('''INSERT INTO config VALUES
     (1, 60, 900, 3600, 1, 7, 30)''') # Default configuration
     
-    c.execute('''CREATE TABLE calibration_points
+    c.execute('''CREATE TABLE IF NOT EXISTS calibration_points
         (id INTEGER PRIMARY KEY,
         pressure_diff REAL NOT NULL,
         flow_rate REAL NOT NULL,
         timestamp TEXT NOT NULL)''')
-
 
     conn.commit() 
     conn.close()
