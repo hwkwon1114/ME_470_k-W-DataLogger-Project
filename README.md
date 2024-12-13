@@ -1,4 +1,4 @@
-# ME_470_k-W/Ton-DataLogger-Project
+# ME_470_kW/Ton-DataLogger-Project
 
 # kW/Ton Data Logger
 
