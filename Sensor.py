@@ -16,7 +16,6 @@ class Sensor:
             xonxoff=False,  # Disable software flow control
             rtscts=False    # Disable hardware flow control
         )
-        self.serial.set_buffer_size(rx_size=12800, tx_size=12800)  # Larger buffer
         time.sleep(2)  # Allow Arduino to reset
         self.serial.reset_input_buffer()
         self.serial.reset_output_buffer()
